@@ -1,29 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateCardDto } from './dto/create-card.dto';
 import { UpdateCardDto } from './dto/update-card.dto';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { Card, prisma } from '@repo/db';
 
 @Injectable()
 export class CardsService {
-  constructor(private readonly db: PrismaService) {}
-
-  // Conta o número de cards em uma coluna
-  private async countCardsInColumn(tx: any, columnId: string) {
-    const cnt = await tx.card.count({ where: { columnId } });
-    return cnt;
-  }
-
-  /**
-   * Move a card: handles reorder in same column and move between columns.
-   * Ensures toOrder is bounded by 0..(len)
-   */
   async moveCard(
     cardId: string,
     fromColumnId: string | null,
     toColumnId: string,
     toOrder: number,
-  ) {
-    return await this.db.$transaction(async (tx) => {
+  ): Promise<Card> {
+    return await prisma.$transaction(async (tx) => {
       const card = await tx.card.findUnique({ where: { id: cardId } });
       if (!card) throw new NotFoundException('Card not found');
 
@@ -31,7 +19,9 @@ export class CardsService {
       const targetColumnId = toColumnId;
 
       // get counts to bound toOrder
-      const targetCount = await this.countCardsInColumn(tx, targetColumnId);
+      const targetCount = await prisma.card.count({
+        where: { columnId: targetColumnId },
+      });
 
       // clamp toOrder to valid range [0, targetCount] (inserting at end allowed)
       const boundedToOrder = Math.max(0, Math.min(toOrder, targetCount));
@@ -60,7 +50,7 @@ export class CardsService {
           ),
         );
 
-        return tx.card.findUnique({ where: { id: cardId } });
+        return tx.card.findUniqueOrThrow({ where: { id: cardId } });
       }
 
       // moving between columns:
@@ -86,25 +76,25 @@ export class CardsService {
     });
   }
 
-  create(createCardDto: CreateCardDto) {
-    return this.db.column.create({ createCardDto });
+  create(cardDto: CreateCardDto): Promise<Card> {
+    return prisma.card.create({ data: cardDto });
   }
 
-  findAll() {
-    return this.db.column.findMany();
+  findAll(): Promise<Card[]> {
+    return prisma.card.findMany();
   }
 
-  findOne(id: number) {
-    return this.db.column.findUnique({
+  findOne(id: string): Promise<Card | null> {
+    return prisma.card.findUnique({
       where: { id },
     });
   }
 
-  update(id: number, updateCardDto: UpdateCardDto) {
-    return this.db.column.update({ where: { id }, updateCardDto });
+  update(id: string, cardDto: UpdateCardDto): Promise<Card> {
+    return prisma.card.update({ where: { id }, data: cardDto });
   }
 
-  remove(id: number) {
-    return this.db.column.delete({ where: { id } });
+  remove(id: string): Promise<Card> {
+    return prisma.card.delete({ where: { id } });
   }
 }

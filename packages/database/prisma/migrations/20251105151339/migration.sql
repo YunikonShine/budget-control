@@ -3,6 +3,8 @@ CREATE TABLE "Column" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "order" INTEGER NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Column_pkey" PRIMARY KEY ("id")
 );
@@ -12,9 +14,9 @@ CREATE TABLE "Card" (
     "id" TEXT NOT NULL,
     "columnId" TEXT NOT NULL,
     "title" TEXT NOT NULL,
-    "descriptionHtml" TEXT,
-    "descriptionJson" JSONB,
-    "descriptionPlain" TEXT,
+    "html" TEXT,
+    "json" JSONB,
+    "plain" TEXT,
     "order" INTEGER NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -29,8 +31,8 @@ CREATE TABLE "CardRevision" (
     "html" TEXT NOT NULL,
     "json" JSONB NOT NULL,
     "plain" TEXT NOT NULL,
-    "authorId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "CardRevision_pkey" PRIMARY KEY ("id")
 );

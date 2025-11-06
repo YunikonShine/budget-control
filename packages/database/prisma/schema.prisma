@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Column {
+  id        String   @id @default(uuid())
+  name      String
+  order     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  cards     Card[]
+}
+
+model Card {
+  id            String         @id @default(uuid())
+  column        Column         @relation(fields: [columnId], references: [id])
+  columnId      String
+  title         String
+  html          String?
+  json          String?
+  plain         String?
+  order         Int
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now())
+  cardRevisions CardRevision[]
+}
+
+model CardRevision {
+  id        String   @id @default(uuid())
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id])
+  html      String
+  json      String
+  plain     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}

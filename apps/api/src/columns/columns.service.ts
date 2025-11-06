@@ -1,34 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import { CreateColumnDto } from './dto/create-column.dto';
 import { UpdateColumnDto } from './dto/update-column.dto';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { Column, prisma } from '@repo/db';
 
 @Injectable()
 export class ColumnsService {
-  constructor(private readonly db: PrismaService) {}
-
-  create(createColumnDto: CreateColumnDto) {
-    return this.db.column.create({ createColumnDto });
+  create(columnDto: CreateColumnDto): Promise<Column> {
+    return prisma.column.create({ data: columnDto });
   }
 
-  findAll() {
-    return this.db.column.findMany({
-      include: { cards: { orderBy: { order: 'asc' } } },
-    });
+  findAll(): Promise<Column[]> {
+    return prisma.column.findMany({include: { cards: { orderBy: { order: 'asc' } } }});
   }
 
-  findOne(id: number) {
-    return this.db.column.findUnique({
+  findOne(id: string): Promise<Column | null> {
+    return prisma.column.findUnique({
       where: { id },
-      include: { cards: { orderBy: { order: 'asc' } } },
     });
   }
 
-  update(id: number, updateColumnDto: UpdateColumnDto) {
-    return this.db.column.update({ where: { id }, updateColumnDto });
+  update(id: string, columnDto: UpdateColumnDto): Promise<Column> {
+    return prisma.column.update({ where: { id }, data: columnDto });
   }
 
-  remove(id: number) {
-    return this.db.column.delete({ where: { id } });
+  remove(id: string): Promise<Column> {
+    return prisma.column.delete({ where: { id } });
   }
 }
