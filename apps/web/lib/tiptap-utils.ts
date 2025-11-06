@@ -9,6 +9,9 @@ import {
 import type { Editor, NodeWithPos } from "@tiptap/react";
 
 export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+// Client-side target to avoid server JSON body size limits when sending base64.
+// Base64 adds ~33%, so 750KB binary ~ 1MB base64; plus small JSON overhead.
+const TARGET_UPLOAD_BYTES = 750 * 1024; // ~0.73 MiB
 
 export const MAC_SYMBOLS: Record<string, string> = {
   mod: "⌘",
@@ -371,28 +374,297 @@ export const handleImageUpload = async (
     );
   }
 
-  // For demo/testing: Simulate upload progress. In production, replace the following code
-  // with your own upload implementation.
-  for (let progress = 0; progress <= 100; progress += 10) {
-    if (abortSignal?.aborted) {
-      throw new Error("Upload cancelled");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    onProgress?.({ progress });
+  // Opportunistic compression to stay under typical body limits when sending base64 JSON
+  let toUpload = file;
+  try {
+    toUpload = await ensureUnderTargetSize(file, TARGET_UPLOAD_BYTES);
+  } catch (err) {
+    console.warn("Image compression skipped due to error:", err);
   }
 
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/upload/image`,
-    {
+  // For demo/testing: Simulate upload progress. In production, replace the following code
+  // with your own upload implementation.
+  // for (let progress = 0; progress <= 100; progress += 10) {
+  //   if (abortSignal?.aborted) {
+  //     throw new Error("Upload cancelled");
+  //   }
+  //   await new Promise((resolve) => setTimeout(resolve, 500));
+  //   onProgress?.({ progress });
+  // }
+
+  // Preferred path: direct S3 upload via pre-signed URL
+  try {
+    // 1) Ask API for a pre-signed URL (no base64 in request)
+    const presignRes = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/upload/image`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: file.name, mimeType: file.type }),
+      body: JSON.stringify({ filename: toUpload.name, mimeType: toUpload.type }),
+    });
+
+    if (presignRes.ok) {
+      const { uploadUrl, publicUrl } = await presignRes.json();
+
+      // 2) PUT the file directly to S3
+      const checksum1 = await computeCRC32Base64(toUpload).catch(() => null);
+      const initialHeaders: Record<string, string> = { "Content-Type": toUpload.type };
+      if (checksum1) {
+        initialHeaders["x-amz-sdk-checksum-algorithm"] = "CRC32";
+        initialHeaders["x-amz-checksum-crc32"] = checksum1;
+      }
+      const putRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: initialHeaders,
+        body: toUpload,
+      });
+
+      if (putRes.ok || putRes.status === 200 || putRes.status === 204) {
+        return publicUrl as string;
+      }
+
+      // If the PUT failed due to size, try compressing further once and retry
+      if (putRes.status === 413) {
+        try {
+          const tighterTarget = Math.floor(TARGET_UPLOAD_BYTES * 0.5); // ~375KB
+          const smaller = await ensureUnderTargetSize(toUpload, tighterTarget);
+          const checksum2 = await computeCRC32Base64(smaller).catch(() => null);
+          const retryHeaders: Record<string, string> = { "Content-Type": smaller.type };
+          if (checksum2) {
+            retryHeaders["x-amz-sdk-checksum-algorithm"] = "CRC32";
+            retryHeaders["x-amz-checksum-crc32"] = checksum2;
+          }
+          const retryPut = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: retryHeaders,
+            body: smaller,
+          });
+          if (retryPut.ok || retryPut.status === 200 || retryPut.status === 204) {
+            return publicUrl as string;
+          }
+        } catch (err) {
+          console.warn("Retry PUT after 413 failed:", err);
+        }
+      }
+
+      // If PUT failed for any other reason, fall through to base64 upload
+      const putMsg = await safeReadText(putRes);
+      console.warn(`Presigned PUT failed (${putRes.status}):`, putMsg);
+    } else {
+      const msg = await safeReadText(presignRes);
+      console.warn(`Presign request failed (${presignRes.status}):`, msg);
     }
-  );
-  const { uploadUrl, publicUrl } = await res.json();
-  await fetch(uploadUrl, { method: "PUT", body: file });
+  } catch (err) {
+    console.warn("Presigned flow failed, falling back to base64:", err);
+  }
+
+  // Fallback path: send as base64 JSON to API (server uploads to S3)
+  const postBase64 = async (f: File) => {
+    return fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/upload/image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: f.name, mimeType: f.type, base64: await fileToBase64(f) }),
+    });
+  };
+
+  let res = await postBase64(toUpload);
+  if (res.status === 413) {
+    try {
+      const tighterTarget = Math.floor(TARGET_UPLOAD_BYTES * 0.5);
+      const moreCompressed = await ensureUnderTargetSize(toUpload, tighterTarget);
+      res = await postBase64(moreCompressed);
+    } catch (err) {
+      console.warn("Retry compression failed after 413:", err);
+    }
+  }
+
+  if (!res.ok) {
+    const msg = await safeReadText(res);
+    throw new Error(`Upload failed (${res.status}): ${msg}`);
+  }
+
+  const { publicUrl } = await res.json();
   return publicUrl;
 };
+
+async function safeReadText(res: Response): Promise<string> {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        resolve(result.split(",")[1]); // Get base64 part
+      } else {
+        reject(new Error("Failed to read file as base64"));
+      }
+    };
+    reader.onerror = () => {
+      reject(new Error("Error reading file"));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Compress image down to a target byte size if needed. No-op if already small. */
+async function ensureUnderTargetSize(file: File, targetBytes: number): Promise<File> {
+  // If already small enough, return as-is
+  if (file.size <= targetBytes) return file;
+
+  // Prefer WEBP for better compression (preserves transparency), fallback to JPEG
+  const preferredFormats = ["image/webp", "image/jpeg"] as const;
+  const img = await loadImageFromFile(file);
+
+  // Start with a reasonable max dimension to cap huge images
+  const maxStartDim = 1920;
+  const { width: w, height: h } = img;
+  const scale0 = Math.min(1, Math.max(maxStartDim / Math.max(w, h), 0.1));
+
+  let quality = 0.82;
+  let scale = scale0;
+  let bestBlob: Blob | null = null;
+
+  for (let i = 0; i < 7; i++) {
+    const out = await renderToBlob(img, { scale, quality, mimeTypes: preferredFormats });
+    if (!out) break;
+
+    if (!bestBlob || out.size < bestBlob.size) bestBlob = out;
+
+    if (out.size <= targetBytes) {
+      return fileFromBlob(out, file.name);
+    }
+
+    // Adjust knobs: reduce quality first, then dimensions
+    if (quality > 0.5) {
+      quality = Math.max(0.5, quality * 0.82);
+    } else if (scale > 0.5) {
+      scale = Math.max(0.5, scale * 0.85);
+    } else {
+      // As a last resort, drop quality further
+      quality = Math.max(0.3, quality * 0.85);
+    }
+  }
+
+  // Could not reach target; return the smallest produced version if any
+  if (bestBlob) return fileFromBlob(bestBlob, file.name);
+  return file;
+}
+
+function fileFromBlob(blob: Blob, originalName: string): File {
+  // Try to keep extension coherent with mime type
+  const ext = mimeToExtension(blob.type) || originalName.split(".").pop() || "bin";
+  const base = originalName.replace(/\.[^.]+$/g, "");
+  const name = `${base}.${ext}`;
+  return new File([blob], name, { type: blob.type });
+}
+
+function mimeToExtension(mime: string): string | null {
+  switch (mime) {
+    case "image/webp":
+      return "webp";
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    default:
+      return null;
+  }
+}
+
+async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Failed to load image"));
+      };
+      img.src = url;
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function renderToBlob(
+  img: HTMLImageElement,
+  opts: { scale: number; quality: number; mimeTypes: readonly string[] }
+): Promise<Blob | null> {
+  const { scale, quality, mimeTypes } = opts;
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, width, height);
+
+  // Try preferred formats in order
+  for (const type of mimeTypes) {
+    const blob = await canvasToBlob(canvas, type, quality);
+    if (blob) return blob;
+  }
+  // Fallback to PNG
+  return await canvasToBlob(canvas, "image/png", 1);
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality);
+  });
+}
+
+// -----------------------------
+// S3 checksum helpers (CRC32)
+// -----------------------------
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : (c >>> 1);
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0 ^ -1;
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i];
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+async function computeCRC32Base64(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const view = new Uint8Array(buf);
+  const val = crc32(view);
+  // Convert 32-bit number to 4-byte big-endian and base64-encode
+  const arr = new Uint8Array(4);
+  arr[0] = (val >>> 24) & 0xff;
+  arr[1] = (val >>> 16) & 0xff;
+  arr[2] = (val >>> 8) & 0xff;
+  arr[3] = val & 0xff;
+  let binary = "";
+  for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
+  // btoa expects binary string
+  return btoa(binary);
+}
 
 type ProtocolOptions = {
   /**

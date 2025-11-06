@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EditorContent, EditorContext, useEditor } from "@tiptap/react";
+import { DOMParser as PMDOMParser, Slice } from "prosemirror-model";
 
 // --- Tiptap Core Extensions ---
 import { StarterKit } from "@tiptap/starter-kit";
@@ -74,6 +75,17 @@ import { handleImageUpload, MAX_FILE_SIZE } from "@/lib/tiptap-utils";
 import "@/components/tiptap-templates/simple/simple-editor.scss";
 
 import content from "@/components/tiptap-templates/simple/data/content.json";
+
+// Helper: convert data URL image (from HTML clipboard e.g. Word/PDF) to a File
+function dataUrlToFile(dataUrl: string, filename = "pasted-image.png"): File {
+  const [meta, base64] = dataUrl.split(",");
+  const match = /data:(.*?);base64/.exec(meta || "");
+  const mime = match?.[1] || "image/png";
+  const bytes = atob(base64 || "");
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new File([arr], filename, { type: mime });
+}
 
 const MainToolbarContent = ({
   onHighlighterClick,
@@ -207,6 +219,164 @@ export function SimpleEditor({ cardId, initialJson, onSaved }: Props) {
         autocapitalize: "off",
         "aria-label": "Main content area, start typing to enter text.",
         class: "simple-editor",
+      },
+      handlePaste: (view, event) => {
+        const e = event as ClipboardEvent;
+        const dt = e.clipboardData;
+        const items = Array.from(dt?.items ?? []);
+        const imageFiles = items
+          .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+          .map((it) => it.getAsFile())
+          .filter((f): f is File => !!f);
+
+        // Probe HTML for embedded data images (common when pasting from Word/PDF)
+        const html = dt?.getData("text/html") || "";
+        let dataImageSrcs: string[] = [];
+        let fileProtocolSrcs: string[] = [];
+        let hasAnyImgInHtml = false;
+        if (html) {
+          try {
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            const imgs = Array.from(doc.querySelectorAll("img"));
+            hasAnyImgInHtml = imgs.length > 0;
+            dataImageSrcs = imgs
+              .map((img) => img.getAttribute("src") || "")
+              .filter(Boolean);
+            fileProtocolSrcs = imgs
+              .map((img) => img.getAttribute("src") || "")
+              .filter((src) => !!src && /^file:/i.test(src));
+          } catch (err) {
+            // ignore parser errors; fallback to default behavior
+          }
+        }
+
+        // Helper: paste sanitized HTML (strip <img> tags) preserving formatting
+        const pasteSanitizedHtml = (htmlString: string) => {
+          const sanitizedHtml = htmlString.replace(/<img[^>]*>/gi, "");
+          const container = document.createElement("div");
+          container.innerHTML = sanitizedHtml;
+          const pmDoc = PMDOMParser.fromSchema(view.state.schema).parse(container);
+          const slice = new Slice(pmDoc.content, 0, 0);
+          const tr = view.state.tr.replaceSelection(slice).scrollIntoView();
+          view.dispatch(tr);
+        };
+
+        // Case A: We have real image files in clipboard
+        if (imageFiles.length) {
+          const plain = dt?.getData("text/plain");
+          const hasHtml = !!html;
+          const hasText = !!(plain && plain.trim());
+
+          // A1: Mixed content (HTML/text + files): prevent default if HTML contains any <img>
+          // to avoid pasting file:// images, paste sanitized HTML (no <img>),
+          // then upload and insert images after the pasted content.
+          if (hasHtml || hasText) {
+            e.preventDefault();
+
+            if (hasHtml) {
+              pasteSanitizedHtml(html);
+            } else if (hasText) {
+              // Insert plain text when there's no HTML
+              const { state, dispatch } = view;
+              dispatch(state.tr.insertText(plain!).scrollIntoView());
+            }
+
+            // Now upload files and insert images sequentially
+            (async () => {
+              for (const file of imageFiles) {
+                try {
+                  const url = await handleImageUpload(file);
+                  const { state, dispatch } = view;
+                  const { image, paragraph } = state.schema.nodes as any;
+                  if (!image) continue;
+                  const imageNode = image.create({ src: url, alt: file.name });
+                  let tr = state.tr.insert(state.selection.to, imageNode).scrollIntoView();
+                  if (paragraph) {
+                    tr = tr.insert(tr.selection.to, paragraph.create());
+                  }
+                  dispatch(tr);
+                } catch (err) {
+                  console.error("Paste image upload failed:", err);
+                }
+              }
+            })();
+            return true; // handled
+          }
+
+          // A2: Only files (no text/html) → fully handle (custom insert + uploads)
+          e.preventDefault();
+          (async () => {
+            for (const file of imageFiles) {
+              try {
+                const url = await handleImageUpload(file);
+                const { state, dispatch } = view;
+                const { image, paragraph } = state.schema.nodes as any;
+                if (!image) continue;
+                const imageNode = image.create({ src: url, alt: file.name });
+                let tr = state.tr.replaceSelectionWith(imageNode, false).scrollIntoView();
+                if (paragraph) {
+                  const pos = tr.selection.to;
+                  tr = tr.insert(pos, paragraph.create());
+                }
+                dispatch(tr);
+              } catch (err) {
+                console.error("Paste image upload failed:", err);
+              }
+            }
+          })();
+          return true;
+        }
+
+        // Case AB: HTML has file:// images but clipboard didn't expose files.
+        // Strip images to avoid security error and paste the rest.
+        if (!imageFiles.length && fileProtocolSrcs.length && html) {
+          e.preventDefault();
+          pasteSanitizedHtml(html);
+          return true;
+        }
+
+        // Case B: No file items, but HTML contains embedded data:image(s).
+        // Let the browser/editor paste happen normally (to preserve formatting),
+        // then replace any pasted data image src with uploaded URLs.
+        if (dataImageSrcs.length) {
+          // Allow default paste
+          setTimeout(async () => {
+            for (const dataSrc of dataImageSrcs) {
+              try {
+                const file = dataUrlToFile(dataSrc);
+                const url = await handleImageUpload(file);
+
+                const { state, dispatch } = view;
+                let tr = state.tr;
+                const imageType = state.schema.nodes["image"];
+                if (!imageType) continue;
+
+                const targets: number[] = [];
+                state.doc.descendants((node, pos) => {
+                  if (node.type === imageType && node.attrs?.src === dataSrc) {
+                    targets.push(pos);
+                  }
+                  return true;
+                });
+
+                for (const pos of targets) {
+                  const current = tr.doc.nodeAt(pos);
+                  if (!current) continue;
+                  const nextAttrs = { ...(current.attrs as any), src: url };
+                  tr = tr.setNodeMarkup(pos, undefined, nextAttrs);
+                }
+
+                if (targets.length) dispatch(tr.scrollIntoView());
+              } catch (err) {
+                console.error("Failed to replace pasted data image:", err);
+              }
+            }
+          }, 0);
+          return false; // keep default paste
+        }
+
+        // Default behavior (no images involved)
+        return false;
       },
     },
     extensions: [
