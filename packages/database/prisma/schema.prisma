@@ -1,11 +1,13 @@
 generator client {
-  provider = "prisma-client-js"
-  output   = "../generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model Column {
@@ -23,21 +25,32 @@ model Card {
   columnId      String
   title         String
   html          String?
-  json          String?
+  json          Json?
   plain         String?
   order         Int
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @default(now())
   cardRevisions CardRevision[]
+  embedding     CardEmbedding?
 }
 
 model CardRevision {
   id        String   @id @default(uuid())
   cardId    String
   card      Card     @relation(fields: [cardId], references: [id])
-  html      String
-  json      String
-  plain     String
+  html      String?
+  json      Json?
+  plain     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now())
+}
+
+model CardEmbedding {
+  id        String                      @id @default(uuid())
+  cardId    String                      @unique
+  card      Card                        @relation(fields: [cardId], references: [id])
+  vector    Unsupported("vector(1536)")
+  text      String                      @db.Text
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @default(now())
 }

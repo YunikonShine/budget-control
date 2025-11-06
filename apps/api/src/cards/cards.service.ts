@@ -2,9 +2,59 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateCardDto } from './dto/create-card.dto';
 import { UpdateCardDto } from './dto/update-card.dto';
 import { Card, prisma } from '@repo/db';
+import { UpdateDescriptionDto } from './dto/update-description.dto';
+import { SanitizeService } from 'src/helpers/sanitize.service';
+import { EmbeddingsService } from 'src/ai/embeddings.service';
 
 @Injectable()
 export class CardsService {
+  constructor(
+    private readonly sanitizeService: SanitizeService,
+    private readonly embeddingsService: EmbeddingsService,
+  ) {}
+
+  async updateDescription(
+    cardId: string,
+    dto: UpdateDescriptionDto,
+  ): Promise<Card> {
+    const card = await prisma.card.findUnique({ where: { id: cardId } });
+    if (!card) {
+      throw new NotFoundException('Card not found');
+    }
+
+    let safeHtml = this.sanitizeService.sanitize(dto.html ?? card.html);
+    let plain =
+      dto.plain?.trim() ?? this.sanitizeService.plainTextFromHtml(safeHtml);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedCard = await tx.card.update({
+        where: { id: cardId },
+        data: {
+          json: dto.json ?? card.json,
+          html: safeHtml,
+          plain: plain,
+        },
+      });
+
+      await tx.cardRevision.create({
+        data: {
+          cardId: cardId,
+          html: safeHtml,
+          json: dto.json ?? card.json,
+          plain: plain
+        },
+      });
+
+      return updatedCard;
+    });
+
+    if(process.env.SKIP_EMBEDDINGS_GENERATION !== 'true') {
+      await this.embeddingsService.generateAndSave(updated.id, plain);
+    }
+
+    return updated;
+  }
+
   async moveCard(
     cardId: string,
     fromColumnId: string | null,

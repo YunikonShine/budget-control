@@ -9,14 +9,21 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.925.0",
+    "@aws-sdk/s3-request-presigner": "^3.925.0",
+    "@langchain/openai": "^1.0.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.1",
+    "@repo/db": "*",
+    "class-validator": "^0.14.2",
     "dotenv": "^17.2.3",
+    "html-to-text": "^9.0.5",
+    "openai": "^6.8.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "@repo/db": "*"
+    "sanitize-html": "^2.17.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
