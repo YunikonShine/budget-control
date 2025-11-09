@@ -17,7 +17,7 @@ export default function KanbanModal({
       onClose={closeModal}
       title={selectedCard?.title ?? "Card"}>
       {selectedCard ? (
-        <SimpleEditor cardId={selectedCard?.id} />
+        <SimpleEditor cardId={selectedCard?.id} initialJson={selectedCard?.json} />
       ) : null}
     </Modal>
   );

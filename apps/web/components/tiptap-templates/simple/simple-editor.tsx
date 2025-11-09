@@ -74,8 +74,6 @@ import { handleImageUpload, MAX_FILE_SIZE } from "@/lib/tiptap-utils";
 // --- Styles ---
 import "@/components/tiptap-templates/simple/simple-editor.scss";
 
-import content from "@/components/tiptap-templates/simple/data/content.json";
-
 // Helper: convert data URL image (from HTML clipboard e.g. Word/PDF) to a File
 function dataUrlToFile(dataUrl: string, filename = "pasted-image.png"): File {
   const [meta, base64] = dataUrl.split(",");
@@ -159,9 +157,9 @@ const MainToolbarContent = ({
 
       {isMobile && <ToolbarSeparator />}
 
-      <ToolbarGroup>
+      {/* <ToolbarGroup>
         <ThemeToggle />
-      </ToolbarGroup>
+      </ToolbarGroup> */}
     </>
   );
 };
@@ -405,7 +403,7 @@ export function SimpleEditor({ cardId, initialJson, onSaved }: Props) {
         onError: (error) => console.error("Upload failed:", error),
       }),
     ],
-    content,
+    content: initialJson,
   });
 
   const rect = useCursorVisibility({
@@ -470,6 +468,7 @@ export function SimpleEditor({ cardId, initialJson, onSaved }: Props) {
           )}
         </Toolbar>
 
+        {/* setting initial value with initialJson */}
         <EditorContent
           editor={editor}
           role="presentation"

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -14,12 +14,31 @@ export default function KanbanColumn({
   column,
   hoveredColumnId,
   openModal,
+  onCreateCard,
 }: {
   column: ColumnType;
   hoveredColumnId: string | null;
   openModal: (card: any) => void;
+  onCreateCard: (columnId: string, title: string) => void | Promise<void>;
 }) {
   const { setNodeRef } = useDroppable({ id: column.id });
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+
+  const startAdd = () => {
+    setAdding(true);
+    setTitle("");
+  };
+  const cancelAdd = () => {
+    setAdding(false);
+    setTitle("");
+  };
+  const submitAdd = async () => {
+    if (!title.trim()) return;
+    await onCreateCard(column.id, title.trim());
+    setAdding(false);
+    setTitle("");
+  };
 
   return (
     <div className={styles.column}>
@@ -45,6 +64,51 @@ export default function KanbanColumn({
         {column.cards.length === 0 && (
           <div className={styles.emptyState}>Sem cards</div>
         )}
+        <div className={styles.addCardArea}>
+          {!adding ? (
+            <button
+              type="button"
+              className={styles.addCardButton}
+              onClick={startAdd}>
+              + Adicionar cartão
+            </button>
+          ) : (
+            <div className={styles.addCardForm}>
+              <textarea
+                className={styles.addCardInput}
+                autoFocus
+                rows={3}
+                placeholder="Título do cartão"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitAdd();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelAdd();
+                  }
+                }}
+              />
+              <div className={styles.addCardActions}>
+                <button
+                  type="button"
+                  className={styles.addCardConfirm}
+                  onClick={submitAdd}
+                  disabled={!title.trim()}>
+                  Criar
+                </button>
+                <button
+                  type="button"
+                  className={styles.addCardCancel}
+                  onClick={cancelAdd}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

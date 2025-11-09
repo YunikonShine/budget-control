@@ -305,6 +305,55 @@ export default function KanbanBoard({
 
   const activeCard = activeId ? (cardById.get(activeId) ?? null) : null;
 
+  // Create a new card optimistically in a given column
+  async function createCard(columnId: string, title: string) {
+    if (!title.trim()) return;
+    let columnLength;
+    setColumns(prev => {
+      const next = prev.map(c => ({ ...c, cards: [...c.cards] }));
+      const col = next.find(c => c.id === columnId);
+      if (!col) return prev;
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const newCard: Card = {
+        id: tempId,
+        title: title.trim(),
+        order: col.cards.length,
+        columnId,
+      };
+      col.cards.push(newCard);
+      columnLength = col.cards.length;
+      return next;
+    });
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+       	body: JSON.stringify({ columnId, title: title.trim(), order: columnLength ? columnLength - 1 : 0 }),
+      });
+      if (!res.ok) {
+        console.error('Create card failed', await res.text());
+        // revert optimistic change
+        setColumns(prev => prev.map(c => ({ ...c, cards: c.cards.filter(card => !card.id.startsWith('temp-')) })));
+        return;
+      }
+      const created = await res.json();
+      // Replace temp card with real card
+      setColumns(prev => prev.map(col => {
+        if (col.id !== columnId) return col;
+        const idx = col.cards.findIndex(c => c.id.startsWith('temp-'));
+        if (idx >= 0) {
+          const updatedCards = [...col.cards];
+          updatedCards[idx] = { ...updatedCards[idx], id: created.id, order: created.order ?? idx, title: created.title };
+          return { ...col, cards: updatedCards };
+        }
+        return col;
+      }));
+    } catch (err) {
+      console.error('Create card error', err);
+      setColumns(prev => prev.map(c => ({ ...c, cards: c.cards.filter(card => !card.id.startsWith('temp-')) })));
+    }
+  }
+
   return (
     <div className={styles.board}>
       <DndContext
@@ -319,6 +368,7 @@ export default function KanbanBoard({
             column={col}
             hoveredColumnId={hoveredColumnId}
             openModal={openModal}
+            onCreateCard={createCard}
           />
         ))}
 
