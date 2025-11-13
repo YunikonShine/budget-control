@@ -1,4 +1,8 @@
+import { IsString, IsInt } from 'class-validator';
+
 export class CreateColumnDto {
-    name: string;
-    order: number;
+  @IsString()
+  name: string;
+  @IsInt()
+  order: number;
 }

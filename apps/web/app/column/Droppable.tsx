@@ -11,7 +11,6 @@ export function Droppable(props: { id: string; children: React.ReactNode, style?
     }
   });
   const style = {
-    color: isOver ? "green" : undefined,
     ...props.style,
   };
 

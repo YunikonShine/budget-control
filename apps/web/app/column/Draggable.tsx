@@ -8,13 +8,15 @@ export function Draggable(props: {
   children: React.ReactNode;
   style?: React.CSSProperties;
   type: string;
+  onClick?: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({
-    id: props.id,
-    data: {
-      type: props.type
-    }
-  });
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: props.id,
+      data: {
+        type: props.type,
+      },
+    });
   const style = transform
     ? {
         transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
@@ -23,7 +25,20 @@ export function Draggable(props: {
     : { ...props.style };
 
   return (
-    <button ref={setNodeRef} style={style} {...listeners} {...attributes}>
+    <button
+      ref={setNodeRef}
+      style={style}
+      {...listeners}
+      {...attributes}
+      type="button"
+      onClick={(e) => {
+        if (isDragging) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        props.onClick?.();
+      }}>
       {props.children}
     </button>
   );
